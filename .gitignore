@@ -1,0 +1,8 @@
+# Всё тяжёлое и локальное не храним: клон manga-image-translator, venv, Python, модели, кэш
+/mit/
+/venv/
+/python/
+/uv-cache/
+/ollama-models/
+__pycache__/
+*.pyc

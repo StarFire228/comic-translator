@@ -1,0 +1,3 @@
+# start.bat в кодировке cp866 с CRLF — не трогать при коммите
+*.bat -text
+*.patch -text

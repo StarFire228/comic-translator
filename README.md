@@ -1,0 +1,69 @@
+# Comic Translator
+
+Переводит комиксы, мангу и картинки с текстом прямо в браузере на русский язык. Всё работает локально, без облачных сервисов.
+
+Состоит из двух частей:
+
+- **Расширение для Chrome** (`extension/`): находит картинки на странице, отправляет их на локальный сервер и подменяет переведёнными.
+- **Локальный сервер**: [manga-image-translator](https://github.com/zyddnys/manga-image-translator) распознаёт и стирает текст, а потом рисует перевод. Переводит модель `aya-expanse:8b` через [Ollama](https://ollama.com).
+
+## Использование
+
+1. Запусти `start.bat` и дождись строки `Uvicorn running on http://127.0.0.1:8001`. Окно не закрывай.
+2. В браузере:
+   - **Alt+T** или клик по иконке расширения переводит все картинки на странице. Повторное нажатие возвращает оригинал.
+   - **Правый клик по картинке → «Перевести эту картинку»** переводит одну картинку.
+
+Картинки меньше 250 px (иконки, аватарки) пропускаются.
+
+## Установка (Windows, видеокарта NVIDIA)
+
+Нужны [Ollama](https://ollama.com/download), [uv](https://docs.astral.sh/uv/) и git. Ниже предполагается папка `E:\ComicTranslator`. Если она другая, поправь пути в `start.bat`.
+
+```bat
+git clone https://github.com/StarFire228/comic-translator E:\ComicTranslator
+cd /d E:\ComicTranslator
+
+rem manga-image-translator на проверенном коммите + патч для Windows
+git clone https://github.com/zyddnys/manga-image-translator mit
+git -C mit checkout d6de6ab
+git -C mit apply ..\patches\manga-image-translator-windows.patch
+
+rem Python 3.13 и зависимости
+uv python install 3.13
+uv venv venv --python 3.13
+uv pip install --python venv\Scripts\python.exe torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytorch.org/whl/cu130
+uv pip install --python venv\Scripts\python.exe -r requirements-win.txt
+
+rem Модель-переводчик (модели Ollama хранятся в ollama-models)
+set OLLAMA_MODELS=E:\ComicTranslator\ollama-models
+ollama pull aya-expanse:8b
+```
+
+Расширение: открой `chrome://extensions`, включи «Режим разработчика», нажми «Загрузить распакованное расширение» и выбери папку `extension`.
+
+При первом переводе сервер скачает модели распознавания и стирания текста, это займёт несколько минут.
+
+### Что делает патч
+
+- `pydensecrf` не собирается на Windows, поэтому уточнение маски без него просто отключается.
+- Пробелы после знаков препинания удаляются только для CJK-текста. Иначе в русском переводе слипались слова.
+- Сервер принимает ответ воркера в формате pickle. Без этого перевод падал с ошибкой 502.
+
+## Настройка
+
+Параметры перевода лежат в `extension/background.js` (`CONFIG`):
+
+| Параметр | Значение | Зачем |
+|---|---|---|
+| `render.alignment` | `left` | Для блоков текста. Для облачков комиксов лучше `center` |
+| `upscale.upscale_ratio` | `2` | Мелкие картинки распознаются точнее, шрифт крупнее |
+| `translator.target_lang` | `RUS` | Язык перевода |
+
+Модель перевода задаётся в `start.bat` (`CUSTOM_OPENAI_MODEL`). Подойдёт любая модель из Ollama.
+
+После правки `background.js` нажми «Обновить» у расширения в `chrome://extensions`.
+
+## Видеопамяти мало?
+
+Переводчику и модели вместе нужно около 8 ГБ видеопамяти. Перед запуском закрой другие программы, которые занимают видеокарту (другие нейросети, игры).

@@ -1,0 +1,61 @@
+diff --git a/manga_translator/mask_refinement/text_mask_utils.py b/manga_translator/mask_refinement/text_mask_utils.py
+index 6f3a1bf..c5a9b8e 100644
+--- a/manga_translator/mask_refinement/text_mask_utils.py
++++ b/manga_translator/mask_refinement/text_mask_utils.py
+@@ -65,10 +65,16 @@ def complete_mask_fill(text_lines: List[Tuple[int, int, int, int]]):
+         final_mask = cv2.rectangle(final_mask, (x, y), (x + w, y + h), (255), -1)
+     return final_mask
+ 
+-from pydensecrf.utils import compute_unary, unary_from_softmax
+-import pydensecrf.densecrf as dcrf
++try:
++    from pydensecrf.utils import compute_unary, unary_from_softmax
++    import pydensecrf.densecrf as dcrf
++except ImportError:
++    # No prebuilt pydensecrf wheel on Windows: fall back to the raw mask
++    dcrf = None
+ 
+ def refine_mask(rgbimg, rawmask):
++    if dcrf is None:
++        return rawmask[:, :, 0] if rawmask.ndim == 3 else rawmask
+     if len(rawmask.shape) == 2:
+         rawmask = rawmask[:, :, None]
+     mask_softmax = np.concatenate([cv2.bitwise_not(rawmask)[:, :, None], rawmask], axis=2)
+diff --git a/manga_translator/rendering/text_render.py b/manga_translator/rendering/text_render.py
+index 068d1b9..e85c4df 100644
+--- a/manga_translator/rendering/text_render.py
++++ b/manga_translator/rendering/text_render.py
+@@ -136,8 +136,8 @@ def CJK_Compatibility_Forms_translate(cdpt: str, direction: int):
+ def compact_special_symbols(text: str) -> str:  
+     text = text.replace('...', '…')  
+     text = text.replace('..', '…')      
+-    # Remove half-width and full-width spaces after each punctuation mark
+-    pattern = r'([^\w\s])[ \u3000]+'  
++    # Remove half-width and full-width spaces after CJK punctuation only (keeps Latin/Cyrillic spacing)
++    pattern = r'([\u3000-\u303f\uff00-\uffef\u2026])[ \u3000]+'
+     text = re.sub(pattern, r'\1', text) 
+     return text
+     
+diff --git a/server/sent_data_internal.py b/server/sent_data_internal.py
+index a19096c..439af02 100644
+--- a/server/sent_data_internal.py
++++ b/server/sent_data_internal.py
+@@ -28,10 +28,15 @@ async def fetch_data(url, image: Image, config: Config, headers: Mapping[str, st
+     async with aiohttp.ClientSession() as session:
+         async with session.post(url, data=data, headers=headers) as response:
+             if response.status == 200:
++                # The executor (manga_translator/mode/share.py) answers with a pickled result
++                body = await response.read()
+                 try:
+-                    return json.loads(await response.text())
+-                except json.JSONDecodeError:
+-                    raise HTTPException(502, detail='Invalid JSON response from upstream')
++                    return pickle.loads(body)
++                except pickle.UnpicklingError:
++                    try:
++                        return json.loads(body)
++                    except json.JSONDecodeError:
++                        raise HTTPException(502, detail='Invalid response from upstream')
+             else:
+                 raise HTTPException(response.status, detail=await response.text())
+ 

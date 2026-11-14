@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Переводчик комиксов",
+  "version": "1.0",
+  "description": "Переводит комиксы на странице на русский через локальный сервер manga-image-translator.",
+  "permissions": ["storage", "contextMenus"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    { "matches": ["<all_urls>"], "js": ["content.js"], "css": ["content.css"], "run_at": "document_idle", "all_frames": true }
+  ],
+  "action": { "default_title": "Перевести комикс (Alt+T)" },
+  "commands": {
+    "translate-page": {
+      "suggested_key": { "default": "Alt+T" },
+      "description": "Перевести картинки на странице / вернуть оригинал"
+    }
+  }
+}
