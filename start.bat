@@ -5,7 +5,7 @@ cd /d E:\ComicTranslator\mit
 rem Нейросеть для перевода (локально через Ollama)
 set CUSTOM_OPENAI_API_BASE=http://127.0.0.1:11434/v1
 set CUSTOM_OPENAI_API_KEY=ollama
-set CUSTOM_OPENAI_MODEL=aya-expanse:8b
+set CUSTOM_OPENAI_MODEL=gemma3:12b
 set PYTHONUTF8=1
 set OLLAMA_MODELS=E:\ComicTranslator\ollama-models
 

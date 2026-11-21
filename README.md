@@ -5,7 +5,7 @@
 Состоит из двух частей:
 
 - **Расширение для Chrome** (`extension/`): находит картинки на странице, отправляет их на локальный сервер и подменяет переведёнными.
-- **Локальный сервер**: [manga-image-translator](https://github.com/zyddnys/manga-image-translator) распознаёт и стирает текст, а потом рисует перевод. Переводит модель `aya-expanse:8b` через [Ollama](https://ollama.com).
+- **Локальный сервер**: [manga-image-translator](https://github.com/zyddnys/manga-image-translator) распознаёт и стирает текст, а потом рисует перевод. Переводит модель `gemma3:12b` через [Ollama](https://ollama.com).
 
 ## Использование
 
@@ -46,7 +46,7 @@ uv pip install --python venv\Scripts\python.exe -r requirements-win.txt
 
 rem Модель-переводчик (модели Ollama хранятся в ollama-models)
 set OLLAMA_MODELS=E:\ComicTranslator\ollama-models
-ollama pull aya-expanse:8b
+ollama pull gemma3:12b
 ```
 
 Расширение: открой `chrome://extensions`, включи «Режим разработчика», нажми «Загрузить распакованное расширение» и выбери папку `extension`.
