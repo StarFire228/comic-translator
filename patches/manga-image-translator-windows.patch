@@ -188,6 +188,31 @@ index 068d1b9..e85c4df 100644
      text = re.sub(pattern, r'\1', text) 
      return text
      
+diff --git a/manga_translator/translators/custom_openai.py b/manga_translator/translators/custom_openai.py
+index 14e7491..9c2b384 100644
+--- a/manga_translator/translators/custom_openai.py
++++ b/manga_translator/translators/custom_openai.py
+@@ -118,9 +118,20 @@ class CustomOpenAiTranslator(ConfigGPT, CommonTranslator):
+                 prompt,
+             ])
+ 
++    @staticmethod
++    def _sentence_case(text: str) -> str:
++        """Comic lettering is often ALL CAPS and the model then answers in caps too: convert to normal case."""
++        letters = [c for c in text if c.isalpha()]
++        if len(letters) < 4 or sum(c.isupper() for c in letters) < 0.8 * len(letters):
++            return text
++        text = text.lower()
++        text = re.sub(r'(^|[.!?…]\s+|["“«(]\s*)([a-z])', lambda m: m.group(1) + m.group(2).upper(), text)
++        return re.sub(r"\bi\b", 'I', text)
++
+     async def _translate(self, from_lang: str, to_lang: str, queries: List[str]) -> List[str]:
+         translations = []
+         self.logger.debug(f'Temperature: {self.temperature}, TopP: {self.top_p}')
++        queries = [self._sentence_case(q) for q in queries]
+ 
+         for prompt, query_size in self._assemble_prompts(from_lang, to_lang, queries):
+             self.logger.debug('-- GPT Prompt --\n' + self._format_prompt_log(to_lang, prompt))
 diff --git a/server/sent_data_internal.py b/server/sent_data_internal.py
 index a19096c..439af02 100644
 --- a/server/sent_data_internal.py

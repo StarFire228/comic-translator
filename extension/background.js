@@ -3,11 +3,13 @@ const SERVER = 'http://127.0.0.1:8000';
 // Настройки перевода для manga-image-translator
 const CONFIG = {
   translator: { translator: 'custom_openai', target_lang: 'RUS' },
-  detector: { detector: 'default', detection_size: 2048 },
+  // 4096: после апскейла x2 мелкий текст иначе теряется при уменьшении под детектор
+  detector: { detector: 'default', detection_size: 4096 },
   inpainter: { inpainter: 'lama_large', inpainting_size: 2048 },
   // alignment: 'left' — для блоков текста (карточки, описания); для облачков комиксов лучше 'center'
   render: { renderer: 'default', direction: 'horizontal', alignment: 'left' },
-  ocr: { ocr: '48px' },
+  // 32px надёжнее читает латиницу с обводкой; 48px молча выкидывал такие строки
+  ocr: { ocr: '32px' },
   // Апскейл x2 перед распознаванием: мелкие картинки читаются точнее, шрифт крупнее и чётче
   upscale: { upscaler: 'esrgan', upscale_ratio: 2, revert_upscaling: true },
   mask_dilation_offset: 20,
