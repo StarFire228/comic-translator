@@ -9,3 +9,5 @@ __pycache__/
 
 # Настройки окна (последняя папка, модель)
 /app-settings.json
+/app/last-run.log
+/app/status.json

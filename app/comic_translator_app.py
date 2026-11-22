@@ -28,6 +28,8 @@ BATCH_CONFIG = ROOT / 'batch-config.json'
 OLLAMA_MODELS = ROOT / 'ollama-models'
 OLLAMA_EXE = Path(os.environ.get('LOCALAPPDATA', '')) / 'Programs' / 'Ollama' / 'ollama.exe'
 SETTINGS_FILE = ROOT / 'app-settings.json'
+RUN_LOG = Path(__file__).resolve().parent / 'last-run.log'
+STATUS_FILE = Path(__file__).resolve().parent / 'status.json'
 ICON = Path(__file__).resolve().parent / 'icon.ico'
 
 VISION_MODEL = 'gemma3:12b'          # читает текст с картинки (vlm_ocr.py)
@@ -337,8 +339,14 @@ class App(ctk.CTk):
         prev.grid_rowconfigure(1, weight=1)
         ctk.CTkLabel(prev, text='Последняя переведённая страница', font=font(13, 'bold'), text_color=TEXT).grid(
             row=0, column=0, sticky='w', padx=16, pady=(14, 6))
+        self.hide_preview = bool(self.settings.get('hide_preview'))
+        self.hide_btn = ctk.CTkButton(prev, text='', width=110, height=28, font=font(12),
+                                      fg_color='transparent', hover_color=PANEL_2, text_color=MUTED,
+                                      command=self._toggle_preview)
+        self.hide_btn.grid(row=0, column=1, padx=10, pady=(10, 2))
         self.preview = ctk.CTkLabel(prev, text='Здесь появится превью', font=font(12), text_color=MUTED)
-        self.preview.grid(row=1, column=0, sticky='nsew', padx=16, pady=(0, 16))
+        self.preview.grid(row=1, column=0, columnspan=2, sticky='nsew', padx=16, pady=(0, 16))
+        self.hide_btn.configure(text='Показать' if self.hide_preview else 'Скрыть превью')
         self.preview.bind('<Configure>', lambda e: self._refresh_preview(force=True))
 
         gpu = ctk.CTkFrame(right, fg_color=PANEL, corner_radius=14)
@@ -442,6 +450,11 @@ class App(ctk.CTk):
         self.done_at_start = self._count_done()
         self.started_at = time.time()
         self._log_clear()
+        try:
+            RUN_LOG.write_text(f'=== {time.strftime("%Y-%m-%d %H:%M:%S")} перевод: {self.src} '
+                               f'(модель {self.model_var.get()})\n', encoding='utf-8')
+        except OSError:
+            pass
         self._set_running(True)
         self.status.configure(text='Запускаю…', text_color=TEXT)
         threading.Thread(target=self._run_batch, daemon=True).start()
@@ -516,8 +529,28 @@ class App(ctk.CTk):
         self.stop_btn.configure(state='normal' if running else 'disabled')
         self.server_btn.configure(state='disabled' if running else 'normal')
 
+    def _run_log(self, text: str):
+        """Полный лог последнего перевода — app\\last-run.log (смотреть, не открывая окно)."""
+        try:
+            with open(RUN_LOG, 'a', encoding='utf-8') as f:
+                f.write(text + '\n')
+        except OSError:
+            pass
+
+    def _write_status(self, info: str):
+        try:
+            STATUS_FILE.write_text(json.dumps({
+                'time': time.strftime('%H:%M:%S'), 'folder': str(self.src) if self.src else None,
+                'running': bool(self.batch), 'paused': self.paused, 'status': self.status.cget('text'),
+                'progress': info, 'errors': self.error_count, 'gpu': self.gpu,
+                'window': self.state(), 'preview_hidden': self.hide_preview,
+            }, ensure_ascii=False, indent=1), encoding='utf-8')
+        except OSError:
+            pass
+
     def _handle_line(self, line: str):
         self._log(line)
+        self._run_log(line)
         m = re.search(r'\[local\] Translating: "(.+)"', line)
         if m:
             self.status.configure(text=f'Перевожу: {Path(m.group(1)).name}', text_color=TEXT)
@@ -546,6 +579,8 @@ class App(ctk.CTk):
                                        'Готовые страницы сохранены', text_color=BAD)
             if not self.log_visible:
                 self._toggle_log()
+        self._run_log(f'=== {time.strftime("%H:%M:%S")} {self.status.cget("text")} (код {code})')
+        self._update_progress()
 
     def _update_progress(self):
         if not self.total:
@@ -564,9 +599,23 @@ class App(ctk.CTk):
             if self.error_count:
                 info += f'   ·   ошибок: {self.error_count}'
         self.progress_info.configure(text=info)
+        self._write_status(info)
 
     # ----- превью -----
+    def _toggle_preview(self):
+        self.hide_preview = not self.hide_preview
+        self.settings['hide_preview'] = self.hide_preview
+        save_settings(self.settings)
+        self.hide_btn.configure(text='Показать' if self.hide_preview else 'Скрыть превью')
+        self._refresh_preview(force=True)
+
     def _refresh_preview(self, force=False):
+        if self.hide_preview:
+            if force or self.preview_path is not None:
+                self._preview_img = None
+                self.preview.configure(image=None, text='Превью скрыто')
+                self.preview_path = None
+            return
         if not self.dest or not self.dest.is_dir():
             if force or self.preview_path is not None:
                 self.preview.configure(image=None, text='Здесь появится превью')
@@ -733,7 +782,26 @@ class App(ctk.CTk):
 
 
 if __name__ == '__main__':
+    import argparse
+    ap = argparse.ArgumentParser(description='Переводчик комиксов')
+    ap.add_argument('--folder', help='сразу выбрать эту папку со страницами')
+    ap.add_argument('--start', action='store_true', help='сразу начать перевод выбранной папки')
+    ap.add_argument('--minimized', action='store_true', help='запустить свёрнутым в панель задач')
+    ap.add_argument('--hide-preview', action='store_true', help='не показывать превью страниц')
+    args = ap.parse_args()
+
     app = App()
+    if args.hide_preview and not app.hide_preview:
+        app._toggle_preview()
+    if args.folder:
+        if Path(args.folder).is_dir():
+            app._set_folder(Path(args.folder))
+        else:
+            messagebox.showerror('Переводчик комиксов', f'Папка не найдена:\n{args.folder}')
+    if args.minimized:
+        app.after(50, app.iconify)
+    if args.start:
+        app.after(800, app._start)
     shot = os.environ.get('APP_SCREENSHOT')   # для проверки: снимок окна и выход
     if shot:
         def _shot():
