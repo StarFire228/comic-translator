@@ -81,7 +81,7 @@ index b6846c9..05cb04a 100644
  
                  if self.save_text or self.save_text_file or self.prep_manual:
 diff --git a/manga_translator/rendering/__init__.py b/manga_translator/rendering/__init__.py
-index fa9264a..5c53a30 100644
+index fa9264a..6121ee8 100644
 --- a/manga_translator/rendering/__init__.py
 +++ b/manga_translator/rendering/__init__.py
 @@ -90,7 +90,9 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
@@ -95,7 +95,7 @@ index fa9264a..5c53a30 100644
              used_rows = len(region.texts)
              # logger.debug(f"Horizontal text - used rows: {used_rows}")
              
-@@ -254,21 +256,135 @@ async def dispatch(
+@@ -254,25 +256,196 @@ async def dispatch(
      # TODO: Maybe remove intersections
  
      # Render text
@@ -146,6 +146,7 @@ index fa9264a..5c53a30 100644
 +            fs = min(fs - 1, int(fs * 0.94))
 +        return None
 +
++    # (shrinking to keep a one-line caption on one line was tried: bubbles got visibly smaller — worse)
 +    for lo, hi, height in ((base_fs * 0.85, base_fs * 1.6, box_h),
 +                           (base_fs * 0.3, base_fs, max_h)):
 +        found = largest(max(lo, 6), int(hi), height)
@@ -180,6 +181,58 @@ index fa9264a..5c53a30 100644
 +            return max(y - 2, y2)
 +        prev = mean
 +    return limit_y
++
++
++def _scan_background(img, dst_points, step, stop):
++    """Walk rows above (step=-1) or below (step=1) the box while they look like the box background.
++
++    Returns (last row that is still background, True if stopped by a border/colour change, False if
++    the scan ran up to `stop` without meeting anything)."""
++    pts = dst_points.reshape(4, 2)
++    x1, x2 = int(max(pts[:, 0].min(), 0)), int(min(pts[:, 0].max(), img.shape[1]))
++    y1, y2 = int(max(pts[:, 1].min(), 0)), int(min(pts[:, 1].max(), img.shape[0]))
++    if x2 - x1 < 8 or y2 - y1 < 4:
++        return (y1 if step < 0 else y2), False
++    mx = (x2 - x1) // 10
++    xs, xe = x1 + mx, x2 - mx
++    ref = np.median(img[y1:y2, xs:xe, :3].reshape(-1, 3).astype(np.float32), axis=0)
++    prev = ref
++    start = y1 - 1 if step < 0 else y2
++    stop = int(max(stop, 0)) if step < 0 else int(min(stop, img.shape[0]))
++    last = y1 if step < 0 else y2
++    for y in range(start, stop, step):
++        row = img[y, xs:xe, :3].astype(np.float32)
++        mean = row.mean(axis=0)
++        if row.std(axis=0).max() > 22 or np.abs(mean - ref).max() > 40 or np.abs(mean - prev).max() > 14:
++            return last, True
++        last, prev = y, mean
++    return last, False
++
++
++def _frame_interior(img, dst_points, limit_y):
++    """(top, bottom) of the frame the box sits in — a caption box or bubble with a visible border
++    both above and below, close to the text. None for text on an open background."""
++    pts = dst_points.reshape(4, 2)
++    box_h = pts[:, 1].max() - pts[:, 1].min()
++    top, hit_top = _scan_background(img, dst_points, -1, pts[:, 1].min() - 3 * box_h)
++    bottom, hit_bottom = _scan_background(img, dst_points, 1, min(limit_y, pts[:, 1].max() + 3 * box_h))
++    if hit_top and hit_bottom and bottom - top > box_h:
++        return top + 2, bottom - 2
++    return None
++
++
++def _center_box_in_frame(dst_points, text_w, text_h, frame):
++    """Resize the box vertically to fit text_w x text_h at the box width and centre it in the frame."""
++    pts = dst_points.reshape(4, 2).astype(np.float64)  # TL, TR, BR, BL
++    box_w = np.linalg.norm(pts[1] - pts[0])
++    if box_w < 1:
++        return dst_points
++    top, bottom = frame
++    need_h = min(text_h * box_w / text_w, bottom - top)
++    new_top = (top + bottom) / 2 - need_h / 2
++    pts[0][1] = pts[1][1] = new_top
++    pts[2][1] = pts[3][1] = new_top + need_h
++    return pts.reshape(dst_points.shape).astype(dst_points.dtype)
 +
 +
 +def _max_box_height(dst_points, img_h):
@@ -228,13 +281,22 @@ index fa9264a..5c53a30 100644
  ):
 +    if limit_y is None:
 +        limit_y = img.shape[0]
++    frame = None
 +    if region.horizontal:
++        # text inside a caption frame/bubble: a longer translation is centred in the frame
++        # instead of hanging down from the original first line (empty band on top)
++        frame = _frame_interior(img, dst_points, limit_y)
 +        # don't grow out of a framed box (bubble/caption border) — see _same_background_limit
 +        limit_y = _same_background_limit(img, dst_points, limit_y)
      fg, bg = region.get_font_colors()
      fg, bg = fg_bg_compare(fg, bg)
  
-@@ -295,19 +411,35 @@ def render(
+-    if disable_font_border :
++    if disable_font_border or getattr(region, 'no_outline', False):
+         bg = None
+ 
+     middle_pts = (dst_points[:, [1, 2, 3, 0]] + dst_points) / 2
+@@ -295,19 +468,37 @@ def render(
      #print(f"Region text: {region.text}, forced_direction: {forced_direction}, render_horizontally: {render_horizontally}")
  
      if render_horizontally:
@@ -254,6 +316,8 @@ index fa9264a..5c53a30 100644
 +        # Allow the text to use the space down to the image edge, so line wrapping keeps
 +        # the original box width instead of widening lines (which later shrinks the font).
 +        avail_h = _max_box_height(dst_points, limit_y) if region.horizontal else norm_v[0]
++        if frame:
++            avail_h = max(avail_h, frame[1] - frame[0])   # the whole frame height, not just below the box
 +
 +        def _put(fs):
 +            return text_render.put_text_horizontal(
@@ -283,14 +347,17 @@ index fa9264a..5c53a30 100644
      else:
          temp_box = text_render.put_text_vertical(
              region.font_size,
-@@ -321,6 +453,15 @@ def render(
+@@ -321,6 +512,18 @@ def render(
      h, w, _ = temp_box.shape
      r_temp = w / h
  
 +    # Translation taller than the original box (e.g. Russian is longer than English):
 +    # grow the box downwards instead of shrinking the whole text block to fit.
 +    if render_horizontally and region.horizontal and r_temp < r_orig:
-+        dst_points = _extend_box_down(dst_points, w, h, limit_y)
++        if frame:
++            dst_points = _center_box_in_frame(dst_points, w, h, frame)
++        else:
++            dst_points = _extend_box_down(dst_points, w, h, limit_y)
 +        middle_pts = (dst_points[:, [1, 2, 3, 0]] + dst_points) / 2
 +        norm_h = np.linalg.norm(middle_pts[:, 1] - middle_pts[:, 3], axis=1)
 +        norm_v = np.linalg.norm(middle_pts[:, 2] - middle_pts[:, 0], axis=1)
@@ -299,7 +366,7 @@ index fa9264a..5c53a30 100644
      # Extend temporary box so that it has same ratio as original
      box = None  
      #print("\n" + "="*50)  
-@@ -359,7 +500,13 @@ def render(
+@@ -359,7 +562,13 @@ def render(
           
                  # The line is full, and there should be no empty columns on the left side of the text. Otherwise, when multiple text boxes are aligned on the left, the translated text cannot be aligned. Common scenarios: borderless comics, comic postscript.  
                  # When there are bubbles on the current page, it can be changed to center: box[0:h, w_ext:w_ext+w] = temp_box, requiring more accurate bubble detection. But not changing it doesn't have much impact.
@@ -314,7 +381,7 @@ index fa9264a..5c53a30 100644
              else:  
                  #print("w_ext < 0, using original temp_box")  
                  box = temp_box.copy()  
-@@ -395,7 +542,7 @@ def render(
+@@ -395,7 +604,7 @@ def render(
              else:   
                  #print("w_ext < 0, using original temp_box")  
                  box = temp_box.copy()   
@@ -323,7 +390,7 @@ index fa9264a..5c53a30 100644
  
      src_points = np.array([[0, 0], [box.shape[1], 0], [box.shape[1], box.shape[0]], [0, box.shape[0]]]).astype(np.float32)
      #src_pts[:, 0] = np.clip(np.round(src_pts[:, 0]), 0, enlarged_w * 2)
-@@ -404,6 +551,10 @@ def render(
+@@ -404,6 +613,10 @@ def render(
      M, _ = cv2.findHomography(src_points, dst_points, cv2.RANSAC, 5.0)
      rgba_region = cv2.warpPerspective(box, M, (img.shape[1], img.shape[0]), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
      x, y, w, h = cv2.boundingRect(dst_points.astype(np.int32))
@@ -335,7 +402,7 @@ index fa9264a..5c53a30 100644
      mask_region = rgba_region[y:y+h, x:x+w, 3:4].astype(np.float32) / 255.0
      img[y:y+h, x:x+w] = np.clip((img[y:y+h, x:x+w].astype(np.float32) * (1 - mask_region) + canvas_region.astype(np.float32) * mask_region), 0, 255).astype(np.uint8)
 diff --git a/manga_translator/rendering/text_render.py b/manga_translator/rendering/text_render.py
-index 068d1b9..8644b4b 100644
+index 068d1b9..fa6b9e9 100644
 --- a/manga_translator/rendering/text_render.py
 +++ b/manga_translator/rendering/text_render.py
 @@ -136,8 +136,8 @@ def CJK_Compatibility_Forms_translate(cdpt: str, direction: int):
@@ -360,12 +427,32 @@ index 068d1b9..8644b4b 100644
      if font_path:
          selection = [font_path] + FALLBACK_FONTS
      else:
+@@ -576,7 +580,8 @@ def put_text_vertical(font_size: int, text: str, h: int, alignment: str, fg: Tup
+     canvas_border = np.clip(canvas_border, 0, 255)
+     line_box = add_color(canvas_text, fg, canvas_border, bg)
+     # rect
+-    x, y, w, h = cv2.boundingRect(canvas_border)
++    # without an outline canvas_border is empty: crop by the text itself then
++    x, y, w, h = cv2.boundingRect(np.maximum(canvas_border, canvas_text).astype(np.uint8))
+     return line_box[y:y+h, x:x+w]
+ 
+ def select_hyphenator(lang: str):
+@@ -1153,7 +1158,8 @@ def put_text_horizontal(font_size: int, text: str, width: int, height: int, alig
+     canvas_border = np.clip(canvas_border, 0, 255)
+     line_box = add_color(canvas_text, fg, canvas_border, bg)
+ 
+-    x, y, w, h = cv2.boundingRect(canvas_border)
++    # without an outline canvas_border is empty: crop by the text itself then
++    x, y, w, h = cv2.boundingRect(np.maximum(canvas_border, canvas_text).astype(np.uint8))
+     return line_box[y:y+h, x:x+w]
+ 
+ # def put_text(img: np.ndarray, text: str, line_count: int, x: int, y: int, w: int, h: int, fg: Tuple[int, int, int], bg: Optional[Tuple[int, int, int]]):
 diff --git a/manga_translator/text_colors.py b/manga_translator/text_colors.py
 new file mode 100644
-index 0000000..556f07d
+index 0000000..db6b0cf
 --- /dev/null
 +++ b/manga_translator/text_colors.py
-@@ -0,0 +1,53 @@
+@@ -0,0 +1,55 @@
 +"""Take the text colour from the original page instead of the OCR model's guess.
 +
 +The OCR model's colour estimate is unreliable on comic lettering (a white title on a pink
@@ -414,7 +501,9 @@ index 0000000..556f07d
 +                continue  # too close to the background to be sure — keep the OCR colour
 +            stroke = np.median(o[edge], axis=0) if edge.sum() >= 30 else None
 +            if stroke is None or np.linalg.norm(stroke - fg) < 90:
-+                # no distinct outline in the original — pick one that contrasts with the fill
++                # no distinct outline in the original: draw the translation without one too
++                # (a forced black outline made plain pink paragraphs look heavy)
++                region.no_outline = True
 +                stroke = np.array([0, 0, 0]) if _luma(fg) >= 80 else np.array([255, 255, 255])
 +            region.set_font_colors(fg.round().astype(int), np.asarray(stroke).round().astype(int))
 +        except Exception as e:  # never break rendering because of colour sampling
