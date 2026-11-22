@@ -386,10 +386,14 @@ class App(ctk.CTk):
         self.folder_label.configure(text=name, text_color=TEXT, font=font(14, 'bold'))
         if not imgs:
             self.folder_info.configure(text='Нет картинок. Если это zip — сначала распакуй', text_color=WARN)
-        elif done:
-            self.folder_info.configure(text=f'Страниц: {self.total}  ·  уже переведено: {done}', text_color=MUTED)
         else:
-            self.folder_info.configure(text=f'Страниц: {self.total}', text_color=MUTED)
+            info = f'Страниц: {self.total}'
+            if done:
+                info += f'  ·  уже переведено: {done}'
+            gifs = sum(1 for p in folder.iterdir() if p.suffix.lower() == '.gif')
+            if gifs:
+                info += f'  ·  гифок пропущу: {gifs}'
+            self.folder_info.configure(text=info, text_color=MUTED)
         self.progress.set(done / self.total if self.total else 0)
         self.progress_info.configure(text=f'{done} из {self.total}' if self.total else '')
         self.open_btn.configure(state='normal' if self.dest.exists() else 'disabled')

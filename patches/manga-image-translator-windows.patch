@@ -41,6 +41,21 @@ index 6f3a1bf..c5a9b8e 100644
      if len(rawmask.shape) == 2:
          rawmask = rawmask[:, :, None]
      mask_softmax = np.concatenate([cv2.bitwise_not(rawmask)[:, :, None], rawmask], axis=2)
+diff --git a/manga_translator/mode/local.py b/manga_translator/mode/local.py
+index b6846c9..888f1b0 100644
+--- a/manga_translator/mode/local.py
++++ b/manga_translator/mode/local.py
+@@ -167,6 +167,10 @@ class MangaTranslatorLocal(MangaTranslator):
+                     for f in files:
+                         if f.lower() == '.thumb':
+                             continue
++                        # GIF animations can't be saved back after translation (the whole run used to abort)
++                        if f.lower().endswith('.gif'):
++                            logger.info(f'Skipping GIF animation: "{f}"')
++                            continue
+ 
+                         file_path = os.path.join(root, f)
+                         output_dest = replace_prefix(file_path, path, _dest)
 diff --git a/manga_translator/rendering/__init__.py b/manga_translator/rendering/__init__.py
 index fa9264a..acc3c6b 100644
 --- a/manga_translator/rendering/__init__.py
