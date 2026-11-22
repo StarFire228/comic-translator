@@ -55,6 +55,20 @@ WARN = '#f5b84b'
 BAD = '#ff5d6c'
 
 
+ERROR_LOG = Path(__file__).resolve().parent / 'error.log'
+
+
+def log_error(where: str, exc_info=None):
+    """Окно запускается без консоли (pythonw), поэтому ошибки пишем в app\\error.log."""
+    import traceback
+    text = ''.join(traceback.format_exception(*exc_info)) if exc_info else traceback.format_exc()
+    try:
+        with open(ERROR_LOG, 'a', encoding='utf-8') as f:
+            f.write(f'--- {time.strftime("%Y-%m-%d %H:%M:%S")} {where}\n{text}\n')
+    except OSError:
+        pass
+
+
 def font(size=13, weight='normal'):
     return ctk.CTkFont(family='Segoe UI', size=size, weight=weight)
 
@@ -744,28 +758,39 @@ class App(ctk.CTk):
 
     # ----- главный цикл -----
     def _tick(self):
+        # Ошибка в любом шаге не должна останавливать цикл: раньше окно «замирало», а перевод шёл дальше
         try:
-            while True:
-                kind, payload = self.lines.get_nowait()
-                if kind == 'line':
-                    self._handle_line(payload)
-                elif kind == 'status':
-                    self.status.configure(text=payload, text_color=TEXT)
-                elif kind == 'finished':
-                    self._finished(payload)
-        except queue.Empty:
-            pass
+            for _ in range(500):            # не больше 500 строк за раз, чтобы окно не подвисало
+                try:
+                    kind, payload = self.lines.get_nowait()
+                except queue.Empty:
+                    break
+                try:
+                    if kind == 'line':
+                        self._handle_line(payload)
+                    elif kind == 'status':
+                        self.status.configure(text=payload, text_color=TEXT)
+                    elif kind == 'finished':
+                        self._finished(payload)
+                except Exception:
+                    log_error(f'обработка «{kind}»')
 
-        now = time.time()
-        if now - getattr(self, '_last_slow', 0) > 1.5:
-            self._last_slow = now
-            if self.batch or self.total:
-                self._update_progress()
-            if self.batch:
-                self._refresh_preview()
-            self._update_gpu()
-            self._check_server()
-        self.after(200, self._tick)
+            now = time.time()
+            if now - getattr(self, '_last_slow', 0) > 1.5:
+                self._last_slow = now
+                for step in (self._update_progress if (self.batch or self.total) else None,
+                             self._refresh_preview if self.batch else None,
+                             self._update_gpu, self._check_server):
+                    if step:
+                        try:
+                            step()
+                        except Exception:
+                            log_error(step.__name__)
+        finally:
+            self.after(200, self._tick)
+
+    def report_callback_exception(self, exc, val, tb):
+        log_error('обработчик окна', (exc, val, tb))
 
     def _on_close(self):
         if self.batch:

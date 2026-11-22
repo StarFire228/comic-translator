@@ -11,3 +11,4 @@ __pycache__/
 /app-settings.json
 /app/last-run.log
 /app/status.json
+/app/error.log
