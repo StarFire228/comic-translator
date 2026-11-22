@@ -6,3 +6,6 @@
 /ollama-models/
 __pycache__/
 *.pyc
+
+# Настройки окна (последняя папка, модель)
+/app-settings.json

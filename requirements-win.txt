@@ -56,3 +56,4 @@ rich==15.0.0
 regex==2026.9.29
 rusty-manga-image-translator==0.12.1
 python-bidi==0.6.11
+customtkinter==6.0.0

@@ -7,7 +7,28 @@
 - **Расширение для Chrome** (`extension/`): находит картинки на странице, отправляет их на локальный сервер и подменяет переведёнными.
 - **Локальный сервер**: [manga-image-translator](https://github.com/zyddnys/manga-image-translator) распознаёт и стирает текст, а потом рисует перевод. Переводит модель `gemma3:12b` через [Ollama](https://ollama.com).
 
-## Использование
+## Приложение
+
+![Окно приложения](app/screenshot.png)
+
+Проще всего пользоваться окном: ярлык **«Переводчик комиксов»** на рабочем столе (запускает `venv\Scripts\pythonw.exe app\comic_translator_app.py`).
+
+- **Перевод папки:** «Выбрать папку» → «Перевести». Видны прогресс, время до конца и превью последней переведённой страницы. Есть «Пауза» и «Стоп». После остановки перевод продолжается с того же места.
+- **Модель перевода** выбирается из списка скачанных в Ollama. Читает текст с картинки всегда `gemma3:12b`.
+- **Видеокарта:** температура, загрузка, видеопамять. Выше 84 °C значение краснеет.
+- **Перевод в браузере** включается и выключается кнопкой, вместо `start.bat`. При закрытии окна он выключается.
+
+Ярлык создаётся так (PowerShell):
+
+```powershell
+$l = (New-Object -ComObject WScript.Shell).CreateShortcut("$([Environment]::GetFolderPath('Desktop'))\Переводчик комиксов.lnk")
+$l.TargetPath = 'E:\ComicTranslator\venv\Scripts\pythonw.exe'; $l.Arguments = '"E:\ComicTranslator\app\comic_translator_app.py"'
+$l.IconLocation = 'E:\ComicTranslator\app\icon.ico,0'; $l.Save()
+```
+
+Для окна нужна библиотека `customtkinter`: `uv pip install --python venv\Scripts\python.exe customtkinter`.
+
+## Без приложения
 
 1. Запусти `start.bat` и дождись строки `Uvicorn running on http://127.0.0.1:8001`. Окно не закрывай.
 2. В браузере:
