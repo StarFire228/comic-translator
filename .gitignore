@@ -13,3 +13,6 @@ __pycache__/
 /app/status.json
 /app/error.log
 /app/error-old.log
+
+# €рлык с пут€ми этого компьютера
+*.lnk
