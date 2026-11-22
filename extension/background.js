@@ -7,7 +7,7 @@ const CONFIG = {
   detector: { detector: 'default', detection_size: 4096 },
   inpainter: { inpainter: 'lama_large', inpainting_size: 2048 },
   // alignment: 'left' — для блоков текста (карточки, описания); для облачков комиксов лучше 'center'
-  render: { renderer: 'default', direction: 'horizontal', alignment: 'left' },
+  render: { renderer: 'default', direction: 'horizontal', alignment: 'left', no_hyphenation: true },
   // 32px надёжнее читает латиницу с обводкой; 48px молча выкидывал такие строки
   ocr: { ocr: '32px', prob: 0.02 },
   // Апскейл x2 перед распознаванием: мелкие картинки читаются точнее, шрифт крупнее и чётче

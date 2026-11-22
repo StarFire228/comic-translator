@@ -71,7 +71,7 @@ index b6846c9..05cb04a 100644
  
                  if self.save_text or self.save_text_file or self.prep_manual:
 diff --git a/manga_translator/rendering/__init__.py b/manga_translator/rendering/__init__.py
-index fa9264a..acc3c6b 100644
+index fa9264a..b576695 100644
 --- a/manga_translator/rendering/__init__.py
 +++ b/manga_translator/rendering/__init__.py
 @@ -90,7 +90,9 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
@@ -85,7 +85,7 @@ index fa9264a..acc3c6b 100644
              used_rows = len(region.texts)
              # logger.debug(f"Horizontal text - used rows: {used_rows}")
              
-@@ -254,21 +256,65 @@ async def dispatch(
+@@ -254,21 +256,96 @@ async def dispatch(
      # TODO: Maybe remove intersections
  
      # Render text
@@ -105,6 +105,34 @@ index fa9264a..acc3c6b 100644
 +        img = render(img, region, dst_points, hyphenate, line_spacing, disable_font_border, limit_y)
      return img
  
++def _same_background_limit(img, dst_points, limit_y):
++    """How far down the box may grow while the area below looks like the box's own background.
++
++    Text boxes in comics are often framed (bubble outline, caption frame): growing past the frame
++    puts text over the border or the artwork. We walk down row by row under the box and stop at the
++    first row that is not a plain continuation of the background (a border line, a colour change,
++    a busy picture). Plain backgrounds (cards, page margins) still let the box grow.
++    """
++    pts = dst_points.reshape(4, 2)
++    x1, x2 = int(max(pts[:, 0].min(), 0)), int(min(pts[:, 0].max(), img.shape[1]))
++    y1, y2 = int(max(pts[:, 1].min(), 0)), int(min(pts[:, 1].max(), img.shape[0]))
++    if x2 - x1 < 8 or y2 - y1 < 4 or y2 >= limit_y:
++        return limit_y
++    # inner 80% of the width: the box edges may touch the frame's side borders
++    mx = (x2 - x1) // 10
++    xs, xe = x1 + mx, x2 - mx
++    inside = img[y1:y2, xs:xe, :3].reshape(-1, 3).astype(np.float32)
++    ref = np.median(inside, axis=0)
++    prev = ref
++    for y in range(y2, int(limit_y)):
++        row = img[y, xs:xe, :3].astype(np.float32)
++        mean = row.mean(axis=0)
++        if row.std(axis=0).max() > 22 or np.abs(mean - ref).max() > 40 or np.abs(mean - prev).max() > 14:
++            return max(y - 2, y2)
++        prev = mean
++    return limit_y
++
++
 +def _max_box_height(dst_points, img_h):
 +    """Height the box may reach if its bottom edge is moved down to the image edge."""
 +    pts = dst_points.reshape(4, 2).astype(np.float64)  # TL, TR, BR, BL
@@ -151,10 +179,13 @@ index fa9264a..acc3c6b 100644
  ):
 +    if limit_y is None:
 +        limit_y = img.shape[0]
++    if region.horizontal:
++        # don't grow out of a framed box (bubble/caption border) — see _same_background_limit
++        limit_y = _same_background_limit(img, dst_points, limit_y)
      fg, bg = region.get_font_colors()
      fg, bg = fg_bg_compare(fg, bg)
  
-@@ -295,19 +341,38 @@ def render(
+@@ -295,19 +372,38 @@ def render(
      #print(f"Region text: {region.text}, forced_direction: {forced_direction}, render_horizontally: {render_horizontally}")
  
      if render_horizontally:
@@ -206,7 +237,7 @@ index fa9264a..acc3c6b 100644
      else:
          temp_box = text_render.put_text_vertical(
              region.font_size,
-@@ -321,6 +386,15 @@ def render(
+@@ -321,6 +417,15 @@ def render(
      h, w, _ = temp_box.shape
      r_temp = w / h
  
@@ -222,7 +253,31 @@ index fa9264a..acc3c6b 100644
      # Extend temporary box so that it has same ratio as original
      box = None  
      #print("\n" + "="*50)  
-@@ -404,6 +478,10 @@ def render(
+@@ -359,7 +464,13 @@ def render(
+          
+                 # The line is full, and there should be no empty columns on the left side of the text. Otherwise, when multiple text boxes are aligned on the left, the translated text cannot be aligned. Common scenarios: borderless comics, comic postscript.  
+                 # When there are bubbles on the current page, it can be changed to center: box[0:h, w_ext:w_ext+w] = temp_box, requiring more accurate bubble detection. But not changing it doesn't have much impact.
+-                box[0:h, 0:w] = temp_box  
++                # Follow the configured alignment: with "center" the shrunk text used to hug the left edge of its frame
++                if region.alignment == 'center':
++                    box[0:h, w_ext:w_ext+w] = temp_box
++                elif region.alignment == 'right':
++                    box[0:h, 2*w_ext:2*w_ext+w] = temp_box
++                else:
++                    box[0:h, 0:w] = temp_box
+             else:  
+                 #print("w_ext < 0, using original temp_box")  
+                 box = temp_box.copy()  
+@@ -395,7 +506,7 @@ def render(
+             else:   
+                 #print("w_ext < 0, using original temp_box")  
+                 box = temp_box.copy()   
+-    #print(f"Final box dimensions: {box.shape if box is not None else 'None'}")  
++    #print(f"Final box dimensions: {box.shape if box is not None else 'None'}")
+ 
+     src_points = np.array([[0, 0], [box.shape[1], 0], [box.shape[1], box.shape[0]], [0, box.shape[0]]]).astype(np.float32)
+     #src_pts[:, 0] = np.clip(np.round(src_pts[:, 0]), 0, enlarged_w * 2)
+@@ -404,6 +515,10 @@ def render(
      M, _ = cv2.findHomography(src_points, dst_points, cv2.RANSAC, 5.0)
      rgba_region = cv2.warpPerspective(box, M, (img.shape[1], img.shape[0]), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
      x, y, w, h = cv2.boundingRect(dst_points.astype(np.int32))
