@@ -3,7 +3,7 @@
   "detector": { "detector": "default", "detection_size": 4096 },
   "inpainter": { "inpainter": "lama_large", "inpainting_size": 2048 },
   "render": { "renderer": "default", "direction": "horizontal", "alignment": "center" },
-  "ocr": { "ocr": "32px" },
+  "ocr": { "ocr": "32px", "prob": 0.02 },
   "upscale": { "upscaler": "esrgan", "upscale_ratio": 2, "revert_upscaling": true },
   "mask_dilation_offset": 20
 }

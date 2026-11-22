@@ -9,7 +9,7 @@ const CONFIG = {
   // alignment: 'left' — для блоков текста (карточки, описания); для облачков комиксов лучше 'center'
   render: { renderer: 'default', direction: 'horizontal', alignment: 'left' },
   // 32px надёжнее читает латиницу с обводкой; 48px молча выкидывал такие строки
-  ocr: { ocr: '32px' },
+  ocr: { ocr: '32px', prob: 0.02 },
   // Апскейл x2 перед распознаванием: мелкие картинки читаются точнее, шрифт крупнее и чётче
   upscale: { upscaler: 'esrgan', upscale_ratio: 2, revert_upscaling: true },
   mask_dilation_offset: 20,

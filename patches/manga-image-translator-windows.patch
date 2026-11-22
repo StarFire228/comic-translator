@@ -1,3 +1,23 @@
+diff --git a/manga_translator/manga_translator.py b/manga_translator/manga_translator.py
+index 2688eeb..58aaff0 100644
+--- a/manga_translator/manga_translator.py
++++ b/manga_translator/manga_translator.py
+@@ -800,8 +800,13 @@ class MangaTranslator:
+                 filtered_textlines.append(txtln)  
+             ctx.textlines = filtered_textlines  
+     
+-        text_regions = await dispatch_textline_merge(ctx.textlines, ctx.img_rgb.shape[1], ctx.img_rgb.shape[0],  
+-                                                     verbose=self.verbose)  
++        text_regions = await dispatch_textline_merge(ctx.textlines, ctx.img_rgb.shape[1], ctx.img_rgb.shape[0],
++                                                     verbose=self.verbose)
++
++        # Re-read each block with a vision LLM when VLM_OCR_MODEL is set (see vlm_ocr.py)
++        from . import vlm_ocr
++        if vlm_ocr.enabled():
++            await vlm_ocr.reread(ctx.img_rgb, text_regions)
+ 
+         new_text_regions = []
+         for region in text_regions:
 diff --git a/manga_translator/mask_refinement/text_mask_utils.py b/manga_translator/mask_refinement/text_mask_utils.py
 index 6f3a1bf..c5a9b8e 100644
 --- a/manga_translator/mask_refinement/text_mask_utils.py
@@ -22,7 +42,7 @@ index 6f3a1bf..c5a9b8e 100644
          rawmask = rawmask[:, :, None]
      mask_softmax = np.concatenate([cv2.bitwise_not(rawmask)[:, :, None], rawmask], axis=2)
 diff --git a/manga_translator/rendering/__init__.py b/manga_translator/rendering/__init__.py
-index fa9264a..5072498 100644
+index fa9264a..acc3c6b 100644
 --- a/manga_translator/rendering/__init__.py
 +++ b/manga_translator/rendering/__init__.py
 @@ -90,7 +90,9 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
@@ -173,6 +193,17 @@ index fa9264a..5072498 100644
      # Extend temporary box so that it has same ratio as original
      box = None  
      #print("\n" + "="*50)  
+@@ -404,6 +478,10 @@ def render(
+     M, _ = cv2.findHomography(src_points, dst_points, cv2.RANSAC, 5.0)
+     rgba_region = cv2.warpPerspective(box, M, (img.shape[1], img.shape[0]), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+     x, y, w, h = cv2.boundingRect(dst_points.astype(np.int32))
++    # Box may stick out of the image (e.g. x = -1): a negative slice start would select nothing
++    x2, y2 = min(x + w, img.shape[1]), min(y + h, img.shape[0])
++    x, y = max(x, 0), max(y, 0)
++    w, h = max(x2 - x, 0), max(y2 - y, 0)
+     canvas_region = rgba_region[y:y+h, x:x+w, :3]
+     mask_region = rgba_region[y:y+h, x:x+w, 3:4].astype(np.float32) / 255.0
+     img[y:y+h, x:x+w] = np.clip((img[y:y+h, x:x+w].astype(np.float32) * (1 - mask_region) + canvas_region.astype(np.float32) * mask_region), 0, 255).astype(np.uint8)
 diff --git a/manga_translator/rendering/text_render.py b/manga_translator/rendering/text_render.py
 index 068d1b9..e85c4df 100644
 --- a/manga_translator/rendering/text_render.py
@@ -213,6 +244,94 @@ index 14e7491..9c2b384 100644
  
          for prompt, query_size in self._assemble_prompts(from_lang, to_lang, queries):
              self.logger.debug('-- GPT Prompt --\n' + self._format_prompt_log(to_lang, prompt))
+diff --git a/manga_translator/vlm_ocr.py b/manga_translator/vlm_ocr.py
+new file mode 100644
+index 0000000..fe1d7c4
+--- /dev/null
++++ b/manga_translator/vlm_ocr.py
+@@ -0,0 +1,82 @@
++"""Re-read detected text blocks with a vision LLM (e.g. gemma3 via Ollama).
++
++The built-in OCR models lose spaces and whole lines on Latin comic lettering
++(tight kerning, outlined text). A vision model reads such crops almost verbatim.
++Enabled when the VLM_OCR_MODEL environment variable is set.
++"""
++import asyncio
++import base64
++import json
++import logging
++import os
++import urllib.request
++
++import cv2
++import numpy as np
++
++logger = logging.getLogger('manga_translator.vlm_ocr')
++
++PROMPT = ('Transcribe the text in this image exactly as written, as one paragraph '
++          '(join the lines with spaces). Output only the text. '
++          'If there is no readable text, output an empty line.')
++
++
++def enabled() -> bool:
++    return bool(os.getenv('VLM_OCR_MODEL'))
++
++
++def _api_base() -> str:
++    return os.getenv('VLM_OCR_API_BASE') or os.getenv('CUSTOM_OPENAI_API_BASE', 'http://127.0.0.1:11434/v1')
++
++
++def _crop(img: np.ndarray, region) -> np.ndarray:
++    x1, y1, x2, y2 = [int(v) for v in region.xyxy]
++    # small margin only: a big one picks up the neighbouring block's text
++    pad = min(12, max(4, int(region.font_size * 0.2))) if region.font_size > 0 else 8
++    h, w = img.shape[:2]
++    crop = img[max(0, y1 - pad):min(h, y2 + pad), max(0, x1 - pad):min(w, x2 + pad)]
++    # small lettering reads better when enlarged
++    if crop.shape[0] < 96:
++        scale = 96 / max(crop.shape[0], 1)
++        crop = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
++    return crop
++
++
++def _ask(crop_rgb: np.ndarray) -> str:
++    ok, png = cv2.imencode('.png', cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2BGR))
++    if not ok:
++        return ''
++    body = {
++        'model': os.environ['VLM_OCR_MODEL'],
++        'temperature': 0,
++        'messages': [{'role': 'user', 'content': [
++            {'type': 'text', 'text': PROMPT},
++            {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,' + base64.b64encode(png.tobytes()).decode()}},
++        ]}],
++    }
++    req = urllib.request.Request(_api_base().rstrip('/') + '/chat/completions', json.dumps(body).encode(),
++                                 {'Content-Type': 'application/json',
++                                  'Authorization': 'Bearer ' + os.getenv('CUSTOM_OPENAI_API_KEY', 'ollama')})
++    with urllib.request.urlopen(req, timeout=180) as resp:
++        data = json.load(resp)
++    return ' '.join(data['choices'][0]['message']['content'].split())
++
++
++async def reread(img_rgb: np.ndarray, regions) -> None:
++    """Replace each region's OCR text with the vision model's reading (in place)."""
++    for region in regions:
++        try:
++            text = await asyncio.to_thread(_ask, _crop(img_rgb, region))
++        except Exception as e:
++            logger.warning(f'VLM OCR failed, keeping OCR text "{region.text}": {e}')
++            continue
++        text = text.strip().strip('`').strip()
++        # the vision model sees no text: drop the block (OCR noise on artwork)
++        if not text:
++            logger.info(f'VLM OCR: no text in "{region.text}", dropping block')
++            region.text = ''
++            region.text_raw = ''
++            continue
++        logger.info(f'VLM OCR: "{region.text}" -> "{text}"')
++        region.text = text
++        region.text_raw = text
 diff --git a/server/sent_data_internal.py b/server/sent_data_internal.py
 index a19096c..439af02 100644
 --- a/server/sent_data_internal.py

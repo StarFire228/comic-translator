@@ -22,6 +22,7 @@ set "DEST=%~f1 (RU)"
 set CUSTOM_OPENAI_API_BASE=http://127.0.0.1:11434/v1
 set CUSTOM_OPENAI_API_KEY=ollama
 set CUSTOM_OPENAI_MODEL=gemma3:12b
+set VLM_OCR_MODEL=gemma3:12b
 set PYTHONUTF8=1
 set OLLAMA_MODELS=E:\ComicTranslator\ollama-models
 
