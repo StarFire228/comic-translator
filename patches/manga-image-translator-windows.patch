@@ -71,7 +71,7 @@ index b6846c9..05cb04a 100644
  
                  if self.save_text or self.save_text_file or self.prep_manual:
 diff --git a/manga_translator/rendering/__init__.py b/manga_translator/rendering/__init__.py
-index fa9264a..b576695 100644
+index fa9264a..5c53a30 100644
 --- a/manga_translator/rendering/__init__.py
 +++ b/manga_translator/rendering/__init__.py
 @@ -90,7 +90,9 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
@@ -85,7 +85,7 @@ index fa9264a..b576695 100644
              used_rows = len(region.texts)
              # logger.debug(f"Horizontal text - used rows: {used_rows}")
              
-@@ -254,21 +256,96 @@ async def dispatch(
+@@ -254,21 +256,135 @@ async def dispatch(
      # TODO: Maybe remove intersections
  
      # Render text
@@ -105,6 +105,45 @@ index fa9264a..b576695 100644
 +        img = render(img, region, dst_points, hyphenate, line_spacing, disable_font_border, limit_y)
      return img
  
++def _fit_font(put, base_fs, box_w, box_h, max_h):
++    """Pick the font size for a horizontal block, wrapping at the box width.
++
++    The old way rendered at one size and then scaled the whole block to the box, so a longer
++    translation came out narrow and tiny inside a wide frame. Here the text is re-wrapped at each
++    size and we take the largest size that fits:
++      1. inside the original box at >= 85% of the original size (up to 160% if it is short);
++      2. otherwise up to the original size within the space the box may grow into (max_h);
++      3. otherwise the largest size that fits max_h, down to 30%.
++    Returns (rendered block, font size).
++    """
++    cache = {}
++
++    def render(fs):
++        fs = max(int(fs), 6)
++        if fs not in cache:
++            cache[fs] = put(fs)
++        return cache[fs], fs
++
++    def fits(block, height):
++        return block is not None and block.shape[1] <= box_w * 1.03 and block.shape[0] <= height
++
++    def largest(lo, hi, height):
++        fs = hi
++        while fs >= lo:
++            block, real = render(fs)
++            if fits(block, height):
++                return block, real
++            fs = min(fs - 1, int(fs * 0.94))
++        return None
++
++    for lo, hi, height in ((base_fs * 0.85, base_fs * 1.6, box_h),
++                           (base_fs * 0.3, base_fs, max_h)):
++        found = largest(max(lo, 6), int(hi), height)
++        if found:
++            return found
++    return render(base_fs * 0.3)
++
++
 +def _same_background_limit(img, dst_points, limit_y):
 +    """How far down the box may grow while the area below looks like the box's own background.
 +
@@ -185,7 +224,7 @@ index fa9264a..b576695 100644
      fg, bg = region.get_font_colors()
      fg, bg = fg_bg_compare(fg, bg)
  
-@@ -295,19 +372,38 @@ def render(
+@@ -295,19 +411,35 @@ def render(
      #print(f"Region text: {region.text}, forced_direction: {forced_direction}, render_horizontally: {render_horizontally}")
  
      if render_horizontally:
@@ -221,23 +260,20 @@ index fa9264a..b576695 100644
 +                line_spacing,
 +            )
 +
-+        temp_box = _put(region.font_size)
-+        # Text leaves much of the original box empty: enlarge the font while it still fits the box
-+        if region.horizontal and temp_box is not None:
-+            fs = region.font_size
-+            max_fs = int(region.font_size * 1.6)
-+            while fs < max_fs:
-+                next_fs = max(fs + 1, int(fs * 1.08))
-+                candidate = _put(next_fs)
-+                ch, cw = candidate.shape[:2]
-+                if cw > norm_h[0] * 1.02 or ch > norm_v[0]:
-+                    break
-+                fs, temp_box = next_fs, candidate
-+            region.font_size = fs
++        if region.horizontal:
++            temp_box, region.font_size = _fit_font(
++                lambda fs: text_render.put_text_horizontal(
++                    fs, region.get_translation_for_rendering(), round(norm_h[0]),
++                    10 ** 6,                     # huge height: wrap strictly at the box width, never widen lines
++                    region.alignment, region.direction == 'hl', fg, bg, region.target_lang,
++                    hyphenate, line_spacing),
++                region.font_size, norm_h[0], norm_v[0], avail_h)
++        else:
++            temp_box = _put(region.font_size)
      else:
          temp_box = text_render.put_text_vertical(
              region.font_size,
-@@ -321,6 +417,15 @@ def render(
+@@ -321,6 +453,15 @@ def render(
      h, w, _ = temp_box.shape
      r_temp = w / h
  
@@ -253,7 +289,7 @@ index fa9264a..b576695 100644
      # Extend temporary box so that it has same ratio as original
      box = None  
      #print("\n" + "="*50)  
-@@ -359,7 +464,13 @@ def render(
+@@ -359,7 +500,13 @@ def render(
           
                  # The line is full, and there should be no empty columns on the left side of the text. Otherwise, when multiple text boxes are aligned on the left, the translated text cannot be aligned. Common scenarios: borderless comics, comic postscript.  
                  # When there are bubbles on the current page, it can be changed to center: box[0:h, w_ext:w_ext+w] = temp_box, requiring more accurate bubble detection. But not changing it doesn't have much impact.
@@ -268,7 +304,7 @@ index fa9264a..b576695 100644
              else:  
                  #print("w_ext < 0, using original temp_box")  
                  box = temp_box.copy()  
-@@ -395,7 +506,7 @@ def render(
+@@ -395,7 +542,7 @@ def render(
              else:   
                  #print("w_ext < 0, using original temp_box")  
                  box = temp_box.copy()   
@@ -277,7 +313,7 @@ index fa9264a..b576695 100644
  
      src_points = np.array([[0, 0], [box.shape[1], 0], [box.shape[1], box.shape[0]], [0, box.shape[0]]]).astype(np.float32)
      #src_pts[:, 0] = np.clip(np.round(src_pts[:, 0]), 0, enlarged_w * 2)
-@@ -404,6 +515,10 @@ def render(
+@@ -404,6 +551,10 @@ def render(
      M, _ = cv2.findHomography(src_points, dst_points, cv2.RANSAC, 5.0)
      rgba_region = cv2.warpPerspective(box, M, (img.shape[1], img.shape[0]), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
      x, y, w, h = cv2.boundingRect(dst_points.astype(np.int32))
@@ -303,6 +339,42 @@ index 068d1b9..e85c4df 100644
      text = re.sub(pattern, r'\1', text) 
      return text
      
+diff --git a/manga_translator/textline_merge/__init__.py b/manga_translator/textline_merge/__init__.py
+index c01267d..f9c9c4a 100644
+--- a/manga_translator/textline_merge/__init__.py
++++ b/manga_translator/textline_merge/__init__.py
+@@ -107,6 +107,17 @@ def split_text_region(
+ #     box = np.array(box)
+ #     return box
+ 
++def _similar_text_colour(a: Quadrilateral, b: Quadrilateral, max_diff: int = 220) -> bool:
++    """White title vs black quote: different captions even if they touch.
++
++    max_diff is the summed R+G+B difference of the text colours (white vs black = 765)."""
++    try:
++        diff = abs(a.fg_r - b.fg_r) + abs(a.fg_g - b.fg_g) + abs(a.fg_b - b.fg_b)
++    except (AttributeError, TypeError):
++        return True
++    return diff <= max_diff
++
++
+ def merge_bboxes_text_region(bboxes: List[Quadrilateral], width, height):
+     # step 0: merge quadrilaterals that belong to the same textline
+     # u = 0
+@@ -131,8 +142,11 @@ def merge_bboxes_text_region(bboxes: List[Quadrilateral], width, height):
+ 
+     for ((u, ubox), (v, vbox)) in itertools.combinations(enumerate(bboxes), 2):
+         # if quadrilateral_can_merge_region_coarse(ubox, vbox):
+-        if quadrilateral_can_merge_region(ubox, vbox, aspect_ratio_tol=1.3, font_size_ratio_tol=2,
+-                                          char_gap_tolerance=1, char_gap_tolerance2=3):
++        # font_size_ratio_tol was 2: a big name title and the smaller line under it ended up in one block.
++        # Lines of clearly different size or text colour are separate captions, not one paragraph.
++        if quadrilateral_can_merge_region(ubox, vbox, aspect_ratio_tol=1.3, font_size_ratio_tol=1.4,
++                                          char_gap_tolerance=1, char_gap_tolerance2=3) \
++                and _similar_text_colour(ubox, vbox):
+             G.add_edge(u, v)
+ 
+     # step 2: postprocess - further split each region
 diff --git a/manga_translator/translators/custom_openai.py b/manga_translator/translators/custom_openai.py
 index 14e7491..9c2b384 100644
 --- a/manga_translator/translators/custom_openai.py
