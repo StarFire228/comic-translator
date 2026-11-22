@@ -27,7 +27,7 @@
 Ярлык создаётся так (PowerShell):
 
 ```powershell
-$l = (New-Object -ComObject WScript.Shell).CreateShortcut("$([Environment]::GetFolderPath('Desktop'))\Переводчик комиксов.lnk")
+$l = (New-Object -ComObject WScript.Shell).CreateShortcut("E:\ComicTranslator\Переводчик комиксов.lnk")
 $l.TargetPath = 'E:\ComicTranslator\venv\Scripts\pythonw.exe'; $l.Arguments = '"E:\ComicTranslator\app\comic_translator_app.py"'
 $l.IconLocation = 'E:\ComicTranslator\app\icon.ico,0'; $l.Save()
 ```
