@@ -12,3 +12,4 @@ __pycache__/
 /app/last-run.log
 /app/status.json
 /app/error.log
+/app/error-old.log

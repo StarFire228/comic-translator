@@ -42,7 +42,7 @@ index 6f3a1bf..c5a9b8e 100644
          rawmask = rawmask[:, :, None]
      mask_softmax = np.concatenate([cv2.bitwise_not(rawmask)[:, :, None], rawmask], axis=2)
 diff --git a/manga_translator/mode/local.py b/manga_translator/mode/local.py
-index b6846c9..888f1b0 100644
+index b6846c9..05cb04a 100644
 --- a/manga_translator/mode/local.py
 +++ b/manga_translator/mode/local.py
 @@ -167,6 +167,10 @@ class MangaTranslatorLocal(MangaTranslator):
@@ -56,6 +56,20 @@ index b6846c9..888f1b0 100644
  
                          file_path = os.path.join(root, f)
                          output_dest = replace_prefix(file_path, path, _dest)
+@@ -280,7 +284,12 @@ class MangaTranslatorLocal(MangaTranslator):
+             if result:
+                 logger.info(f'Saving "{dest}"')
+                 ctx.save_quality = self.save_quality
+-                save_result(result, dest, ctx)
++                # Write to a temp file and swap it in: if the run is killed mid-save, no half-written
++                # page is left behind that the next run would skip as "already translated".
++                p, ext = os.path.splitext(dest)
++                tmp_dest = f'{p}.partial{ext}'
++                save_result(result, tmp_dest, ctx)
++                os.replace(tmp_dest, dest)
+                 await self._report_progress('saved', True)
+ 
+                 if self.save_text or self.save_text_file or self.prep_manual:
 diff --git a/manga_translator/rendering/__init__.py b/manga_translator/rendering/__init__.py
 index fa9264a..acc3c6b 100644
 --- a/manga_translator/rendering/__init__.py
