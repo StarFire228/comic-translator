@@ -15,11 +15,12 @@ import threading
 import time
 import urllib.request
 from pathlib import Path
+import tkinter as tk
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 import psutil
-from PIL import Image
+from PIL import Image, ImageTk
 
 ROOT = Path(__file__).resolve().parent.parent          # E:\ComicTranslator
 MIT = ROOT / 'mit'
@@ -223,7 +224,6 @@ class App(ctk.CTk):
         self.paused_time = 0.0
         self.paused_since = 0.0
         self.error_count = 0
-        self.preview_path = None
         self.server = None             # subprocess.Popen браузерного переводчика
         self.server_state = 'off'
         self.log_visible = False
@@ -351,17 +351,26 @@ class App(ctk.CTk):
         prev.grid(row=0, column=0, sticky='nsew')
         prev.grid_columnconfigure(0, weight=1)
         prev.grid_rowconfigure(1, weight=1)
-        ctk.CTkLabel(prev, text='Последняя переведённая страница', font=font(13, 'bold'), text_color=TEXT).grid(
+        ctk.CTkLabel(prev, text='Превью', font=font(13, 'bold'), text_color=TEXT).grid(
             row=0, column=0, sticky='w', padx=16, pady=(14, 6))
         self.hide_preview = bool(self.settings.get('hide_preview'))
-        self.hide_btn = ctk.CTkButton(prev, text='', width=110, height=28, font=font(12),
+        self.hide_btn = ctk.CTkButton(prev, text='', width=96, height=28, font=font(12),
                                       fg_color='transparent', hover_color=PANEL_2, text_color=MUTED,
                                       command=self._toggle_preview)
         self.hide_btn.grid(row=0, column=1, padx=10, pady=(10, 2))
-        self.preview = ctk.CTkLabel(prev, text='Здесь появится превью', font=font(12), text_color=MUTED)
-        self.preview.grid(row=1, column=0, columnspan=2, sticky='nsew', padx=16, pady=(0, 16))
-        self.hide_btn.configure(text='Показать' if self.hide_preview else 'Скрыть превью')
-        self.preview.bind('<Configure>', lambda e: self._refresh_preview(force=True))
+        # Обычный tk.Label с ImageTk: CTkLabel терял картинки («image pyimage2 doesn't exist»).
+        # Картинка стоит по центру через place(), поэтому её размер не меняет размер области
+        # и не запускает перерисовку по кругу.
+        self.preview_box = tk.Frame(prev, bg=PANEL, highlightthickness=0)
+        self.preview_box.grid(row=1, column=0, columnspan=2, sticky='nsew', padx=16, pady=(0, 16))
+        self.preview = tk.Label(self.preview_box, bg=PANEL, fg=MUTED, font=('Segoe UI', 10),
+                                text='Здесь появится превью', bd=0)
+        self.preview.place(relx=0.5, rely=0.5, anchor='center')
+        self._photo = None
+        self._preview_key = None
+        self._resize_job = None
+        self.hide_btn.configure(text='Показать' if self.hide_preview else 'Скрыть')
+        self.preview_box.bind('<Configure>', self._on_preview_resize)
 
         gpu = ctk.CTkFrame(right, fg_color=PANEL, corner_radius=14)
         gpu.grid(row=1, column=0, sticky='ew', pady=(12, 0))
@@ -377,9 +386,11 @@ class App(ctk.CTk):
         srv = ctk.CTkFrame(right, fg_color=PANEL, corner_radius=14)
         srv.grid(row=2, column=0, sticky='ew', pady=(12, 0))
         srv.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(srv, text='Перевод в браузере (Alt+T)', font=font(13, 'bold'), text_color=TEXT).grid(
-            row=0, column=0, sticky='w', padx=16, pady=(12, 0))
-        self.server_label = ctk.CTkLabel(srv, text='Выключен', font=font(12), text_color=MUTED, anchor='w')
+        ctk.CTkLabel(srv, text='В браузере (Alt+T)', font=font(13, 'bold'), text_color=TEXT, anchor='w').grid(
+            row=0, column=0, sticky='ew', padx=16, pady=(12, 0))
+        # wraplength: длинный статус переносится, а не обрезается в узком окне
+        self.server_label = ctk.CTkLabel(srv, text='Выключен', font=font(12), text_color=MUTED, anchor='w',
+                                         justify='left', wraplength=140)
         self.server_label.grid(row=1, column=0, sticky='ew', padx=16, pady=(0, 12))
         self.server_btn = ctk.CTkButton(srv, text='Включить', width=110, height=34, font=font(13, 'bold'),
                                         fg_color=PANEL_2, hover_color='#33354a', command=self._toggle_server)
@@ -421,7 +432,7 @@ class App(ctk.CTk):
         self.open_btn.configure(state='normal' if self.dest.exists() else 'disabled')
         self.settings['last_folder'] = str(folder)
         save_settings(self.settings)
-        self.preview_path = None
+        self._preview_key = None
         self._refresh_preview()
 
     def _count_done(self) -> int:
@@ -620,39 +631,51 @@ class App(ctk.CTk):
         self.hide_preview = not self.hide_preview
         self.settings['hide_preview'] = self.hide_preview
         save_settings(self.settings)
-        self.hide_btn.configure(text='Показать' if self.hide_preview else 'Скрыть превью')
+        self.hide_btn.configure(text='Показать' if self.hide_preview else 'Скрыть')
         self._refresh_preview(force=True)
 
+    def _on_preview_resize(self, _event=None):
+        # при перетаскивании края окна событий много — перерисовываем один раз, когда размер устоялся
+        if self._resize_job:
+            self.after_cancel(self._resize_job)
+        self._resize_job = self.after(200, lambda: self._refresh_preview(force=True))
+
+    def _show_preview_text(self, text: str):
+        self._photo = None
+        self.preview.configure(image='', text=text)
+        self._preview_key = None
+
     def _refresh_preview(self, force=False):
+        self._resize_job = None
         if self.hide_preview:
-            if force or self.preview_path is not None:
-                self._preview_img = None
-                self.preview.configure(image=None, text='Превью скрыто')
-                self.preview_path = None
+            if force or self._preview_key is not None:
+                self._show_preview_text('Превью скрыто')
             return
         if not self.dest or not self.dest.is_dir():
-            if force or self.preview_path is not None:
-                self.preview.configure(image=None, text='Здесь появится превью')
-                self.preview_path = None
+            if force or self._preview_key is not None:
+                self._show_preview_text('Здесь появится превью')
             return
         files = [p for p in self.dest.iterdir() if p.suffix.lower() in IMAGE_EXTS]
         if not files:
+            if force:
+                self._show_preview_text('Здесь появится превью')
             return
         newest = max(files, key=lambda p: p.stat().st_mtime)
-        if newest == self.preview_path and not force:
+        box_w = max(self.preview_box.winfo_width() - 4, 120)
+        box_h = max(self.preview_box.winfo_height() - 4, 120)
+        key = (newest, newest.stat().st_mtime, box_w, box_h)
+        if key == self._preview_key:
             return
         try:
             img = Image.open(newest)
-            img.load()
+            img.draft('RGB', (box_w, box_h))      # JPEG сразу декодируется в уменьшенном виде — быстро
+            img = img.convert('RGB')
+            img.thumbnail((box_w, box_h))
         except Exception:
-            return  # файл ещё дописывается
-        box_w = max(self.preview.winfo_width() - 8, 200)
-        box_h = max(self.preview.winfo_height() - 8, 200)
-        scale = min(box_w / img.width, box_h / img.height, 1.0)
-        size = (max(1, int(img.width * scale)), max(1, int(img.height * scale)))
-        self._preview_img = ctk.CTkImage(light_image=img, dark_image=img, size=size)
-        self.preview.configure(image=self._preview_img, text='')
-        self.preview_path = newest
+            return  # файл ещё дописывается — покажем на следующем шаге
+        self._photo = ImageTk.PhotoImage(img)       # ссылку держим, иначе картинка пропадёт
+        self.preview.configure(image=self._photo, text='')
+        self._preview_key = key
 
     def _open_dest(self):
         if self.dest and self.dest.exists():
@@ -727,10 +750,10 @@ class App(ctk.CTk):
 
     def _update_server_ui(self):
         if self.server_state == 'on':
-            self.server_label.configure(text='● Работает — открой страницу и нажми Alt+T', text_color=OK)
+            self.server_label.configure(text='● Работает, жми Alt+T', text_color=OK)
             self.server_btn.configure(text='Выключить')
         elif self.server_state == 'starting':
-            self.server_label.configure(text='● Запускается, около минуты…', text_color=WARN)
+            self.server_label.configure(text='● Запускается, около минуты', text_color=WARN)
             self.server_btn.configure(text='Отмена')
         else:
             self.server_label.configure(text='Выключен', text_color=MUTED)
