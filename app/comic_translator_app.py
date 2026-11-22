@@ -137,17 +137,43 @@ def translator_env(model: str) -> dict:
     return env
 
 
+_OLLAMA_STARTED = []      # Ollama, запущенная этим окном: её же и выключим при закрытии
+
+
 def ensure_ollama():
     if port_open(11434):
         return
     env = os.environ.copy()
     env['OLLAMA_MODELS'] = str(OLLAMA_MODELS)
-    subprocess.Popen([str(OLLAMA_EXE), 'serve'], env=env, creationflags=NO_WINDOW,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _OLLAMA_STARTED.append(subprocess.Popen([str(OLLAMA_EXE), 'serve'], env=env, creationflags=NO_WINDOW,
+                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
     for _ in range(40):
         if port_open(11434):
             return
         time.sleep(0.5)
+
+
+def unload_models():
+    """Ollama держит модель в памяти ещё 5 минут после запроса (~8 ГБ ОЗУ и 7,5 ГБ видеопамяти) — выгружаем сразу."""
+    if not port_open(11434):
+        return
+    try:
+        with urllib.request.urlopen('http://127.0.0.1:11434/api/ps', timeout=3) as r:
+            loaded = [m['name'] for m in json.load(r).get('models', [])]
+        for name in loaded:
+            req = urllib.request.Request('http://127.0.0.1:11434/api/generate',
+                                         json.dumps({'model': name, 'keep_alive': 0}).encode(),
+                                         {'Content-Type': 'application/json'})
+            urllib.request.urlopen(req, timeout=15).read()
+    except Exception:
+        log_error('выгрузка моделей Ollama')
+
+
+def stop_own_ollama():
+    unload_models()
+    for proc in _OLLAMA_STARTED:
+        kill_tree(proc.pid)
+    _OLLAMA_STARTED.clear()
 
 
 def kill_tree(pid: int):
@@ -587,6 +613,8 @@ class App(ctk.CTk):
         self.batch = None
         self.paused = False
         self._set_running(False)
+        if self.server_state == 'off':        # браузерному переводчику модель ещё нужна
+            threading.Thread(target=unload_models, daemon=True).start()
         self._update_progress()
         self.open_btn.configure(state='normal' if self.dest and self.dest.exists() else 'disabled')
         if isinstance(code, str):
@@ -826,6 +854,7 @@ class App(ctk.CTk):
             kill_tree(self.batch.pid)
         if self.server_state != 'off':
             self._stop_server()
+        stop_own_ollama()                     # освобождаем память и видеопамять сразу, а не через 5 минут
         self.destroy()
 
 
