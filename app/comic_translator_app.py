@@ -123,13 +123,20 @@ def fmt_duration(seconds: float) -> str:
     return 'меньше минуты'
 
 
-def translator_env(model: str) -> dict:
+FONT_PATH = r'C:\Windows\Fonts\segoeuib.ttf'   # жирный, с кириллицей: комиксы набраны жирным
+FEMININE_HINT = ('Most characters in this comic are young women. When a speaker talks about herself, '
+                 'use feminine grammatical forms in Russian (e.g. "проиграла", "сделала").')
+
+
+def translator_env(model: str, feminine: bool = False) -> dict:
     env = os.environ.copy()
     env.update({
         'CUSTOM_OPENAI_API_BASE': 'http://127.0.0.1:11434/v1',
         'CUSTOM_OPENAI_API_KEY': 'ollama',
         'CUSTOM_OPENAI_MODEL': model,
         'VLM_OCR_MODEL': VISION_MODEL,
+        'MT_FONT_PATH': FONT_PATH,
+        'TRANSLATION_HINT': FEMININE_HINT if feminine else '',
         'PYTHONUTF8': '1',
         'PYTHONUNBUFFERED': '1',
         'OLLAMA_MODELS': str(OLLAMA_MODELS),
@@ -308,8 +315,18 @@ class App(ctk.CTk):
                                       command=self._pick_folder)
         self.pick_btn.grid(row=0, column=1, rowspan=2, padx=12)
 
-        opts = ctk.CTkFrame(left, fg_color='transparent')
-        opts.grid(row=2, column=0, sticky='ew', padx=20, pady=(14, 0))
+        opts_box = ctk.CTkFrame(left, fg_color='transparent')
+        opts_box.grid(row=2, column=0, sticky='ew', padx=20, pady=(14, 0))
+        opts = ctk.CTkFrame(opts_box, fg_color='transparent')
+        opts.pack(side='top', fill='x')
+        # Русский различает род: без подсказки героини говорили о себе «проиграл», «буду прямолинейным»
+        self.feminine_var = ctk.BooleanVar(value=bool(self.settings.get('feminine', True)))
+        self.feminine_box = ctk.CTkCheckBox(opts_box, text='Героини — девушки (женский род в репликах)',
+                                            variable=self.feminine_var, font=font(12), text_color=MUTED,
+                                            checkbox_width=18, checkbox_height=18, border_width=2,
+                                            fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                                            command=self._feminine_changed)
+        self.feminine_box.pack(side='top', anchor='w', pady=(10, 0))
         ctk.CTkLabel(opts, text='Модель перевода', font=font(13), text_color=MUTED).pack(side='left')
         model = self.settings.get('model', VISION_MODEL)
         if model not in self.models:
@@ -472,6 +489,10 @@ class App(ctk.CTk):
         self.settings['model'] = value
         save_settings(self.settings)
 
+    def _feminine_changed(self):
+        self.settings['feminine'] = bool(self.feminine_var.get())
+        save_settings(self.settings)
+
     # ----- перевод -----
     def _start(self):
         if self.batch:
@@ -517,7 +538,7 @@ class App(ctk.CTk):
         cmd = [str(PYTHON), '-m', 'manga_translator', '--use-gpu', '--ignore-errors', '--attempts', '2',
                'local', '-i', str(self.src), '-o', str(self.dest), '--config-file', str(BATCH_CONFIG)]
         try:
-            self.batch = subprocess.Popen(cmd, cwd=str(MIT), env=translator_env(self.model_var.get()),
+            self.batch = subprocess.Popen(cmd, cwd=str(MIT), env=translator_env(self.model_var.get(), self.feminine_var.get()),
                                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                           creationflags=NO_WINDOW, text=True, encoding='utf-8', errors='replace',
                                           bufsize=1)
@@ -576,6 +597,7 @@ class App(ctk.CTk):
         self.start_btn.configure(state='disabled' if running else 'normal')
         self.pick_btn.configure(state='disabled' if running else 'normal')
         self.model_menu.configure(state='disabled' if running else 'normal')
+        self.feminine_box.configure(state='disabled' if running else 'normal')
         self.pause_btn.configure(state='normal' if running else 'disabled', text='⏸  Пауза')
         self.stop_btn.configure(state='normal' if running else 'disabled')
         self.server_btn.configure(state='disabled' if running else 'normal')
@@ -747,7 +769,7 @@ class App(ctk.CTk):
             ensure_ollama()
             cmd = [str(PYTHON), 'server/main.py', '--use-gpu', '--start-instance', '--nonce', 'None',
                    '--host', '127.0.0.1', '--port', '8000']
-            self.server = subprocess.Popen(cmd, cwd=str(MIT), env=translator_env(self.model_var.get()),
+            self.server = subprocess.Popen(cmd, cwd=str(MIT), env=translator_env(self.model_var.get(), self.feminine_var.get()),
                                            creationflags=NO_WINDOW, stdout=subprocess.DEVNULL,
                                            stderr=subprocess.DEVNULL)
         threading.Thread(target=run, daemon=True).start()

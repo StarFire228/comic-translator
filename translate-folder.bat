@@ -17,6 +17,8 @@ set CUSTOM_OPENAI_API_BASE=http://127.0.0.1:11434/v1
 set CUSTOM_OPENAI_API_KEY=ollama
 set CUSTOM_OPENAI_MODEL=gemma3:12b
 set VLM_OCR_MODEL=gemma3:12b
+set MT_FONT_PATH=C:\Windows\Fonts\segoeuib.ttf
+set TRANSLATION_HINT=Most characters in this comic are young women. When a speaker talks about herself, use feminine grammatical forms in Russian.
 set PYTHONUTF8=1
 set OLLAMA_MODELS=E:\ComicTranslator\ollama-models
 
